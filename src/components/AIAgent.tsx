@@ -13,6 +13,7 @@ interface AgentResponse {
   sources?: string[];
   confidence?: number;
   processingTime?: number;
+  searchUsed?: boolean;
 }
 
 export default function AIAgent({ className = '' }: AIAgentProps) {
@@ -20,10 +21,21 @@ export default function AIAgent({ className = '' }: AIAgentProps) {
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string>('');
   const [agentStatus, setAgentStatus] = useState<'idle' | 'ready' | 'error'>('idle');
+  const [toolsStatus, setToolsStatus] = useState<{
+    isInitialized: boolean;
+    totalTools: number;
+    availableTools: Array<{
+      name: string;
+      description: string;
+      isAvailable: boolean;
+      isInitialized: boolean;
+    }>;
+  } | null>(null);
 
   // Check agent status on component mount
   React.useEffect(() => {
     checkAgentStatus();
+    checkToolsStatus();
   }, []);
 
   const checkAgentStatus = async () => {
@@ -40,6 +52,19 @@ export default function AIAgent({ className = '' }: AIAgentProps) {
     } catch {
       setAgentStatus('error');
       setError('Failed to connect to the AI agent.');
+    }
+  };
+
+  const checkToolsStatus = async () => {
+    try {
+      const res = await fetch('/api/tools');
+      const data = await res.json();
+      
+      if (data.success) {
+        setToolsStatus(data.data.status);
+      }
+    } catch {
+      console.warn('Failed to get tools status');
     }
   };
 
@@ -109,13 +134,31 @@ export default function AIAgent({ className = '' }: AIAgentProps) {
   return (
     <div className={`space-y-6 ${className}`}>
       {/* Agent Status */}
-      <div className="flex items-center gap-2 p-3 bg-gray-50 rounded-lg">
-        <Bot className="w-5 h-5 text-blue-600" />
-        <span className="font-medium text-gray-700">AI Research Agent</span>
-        <div className="flex items-center gap-2 ml-auto">
-          {getStatusIcon()}
-          <span className="text-sm text-gray-600">{getStatusText()}</span>
+      <div className="space-y-3">
+        <div className="flex items-center gap-2 p-3 bg-gray-50 rounded-lg">
+          <Bot className="w-5 h-5 text-blue-600" />
+          <span className="font-medium text-gray-700">AI Research Agent</span>
+          <div className="flex items-center gap-2 ml-auto">
+            {getStatusIcon()}
+            <span className="text-sm text-gray-600">{getStatusText()}</span>
+          </div>
         </div>
+
+        {/* Tools Status */}
+        {toolsStatus && (
+          <div className="p-3 bg-blue-50 rounded-lg">
+            <h4 className="font-medium text-blue-800 mb-2">Available Tools</h4>
+            <div className="space-y-2">
+              {toolsStatus.availableTools?.map((tool, index: number) => (
+                <div key={index} className="flex items-center gap-2">
+                  <div className={`w-2 h-2 rounded-full ${tool.isAvailable ? 'bg-green-500' : 'bg-red-500'}`}></div>
+                  <span className="text-sm text-blue-700">{tool.name}</span>
+                  <span className="text-xs text-blue-600">({tool.description})</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Voice Input */}
@@ -165,16 +208,27 @@ export default function AIAgent({ className = '' }: AIAgentProps) {
               <h3 className="text-lg font-semibold text-green-800 mb-2">
                 AI Response
               </h3>
-              {response.processingTime && (
-                <p className="text-sm text-green-600 mb-2">
-                  Processed in {response.processingTime}ms
-                  {response.confidence && (
-                    <span className="ml-2">
-                      • Confidence: {Math.round(response.confidence * 100)}%
-                    </span>
-                  )}
-                </p>
-              )}
+              <div className="flex items-center gap-2 mb-2">
+                {response.searchUsed ? (
+                  <span className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-800 text-xs font-medium rounded-full">
+                    🔍 Web Search
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 px-2 py-1 bg-purple-100 text-purple-800 text-xs font-medium rounded-full">
+                    🧠 AI Knowledge
+                  </span>
+                )}
+                {response.processingTime && (
+                  <span className="text-sm text-green-600">
+                    Processed in {response.processingTime}ms
+                    {response.confidence && (
+                      <span className="ml-2">
+                        • Confidence: {Math.round(response.confidence * 100)}%
+                      </span>
+                    )}
+                  </span>
+                )}
+              </div>
             </div>
           </div>
           

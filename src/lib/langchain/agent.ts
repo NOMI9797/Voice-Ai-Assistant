@@ -1,12 +1,15 @@
 import { ChatGroq } from '@langchain/groq';
 import { HumanMessage, SystemMessage } from '@langchain/core/messages';
+import { AgentExecutor } from 'langchain/agents';
 import { createGroqLLM, agentConfig, LangChainError } from './config';
+import { getToolsManager, ToolsManager } from './tools';
 
 export interface AgentResponse {
   content: string;
   sources?: string[];
   confidence?: number;
   processingTime?: number;
+  searchUsed?: boolean;
 }
 
 export interface AgentRequest {
@@ -17,11 +20,14 @@ export interface AgentRequest {
 
 export class ResearchAgent {
   private llm!: ChatGroq;
+  private toolsManager!: ToolsManager;
+  private agentExecutor: AgentExecutor | null = null;
   private isInitialized: boolean = false;
 
   constructor() {
     try {
       this.llm = createGroqLLM();
+      this.toolsManager = getToolsManager();
       this.isInitialized = true;
     } catch (error) {
       console.error('Failed to initialize ResearchAgent:', error);
@@ -45,25 +51,45 @@ export class ResearchAgent {
         throw new LangChainError('Query cannot be empty.');
       }
 
-      // Prepare messages
-      const messages = [
-        new SystemMessage(agentConfig.systemPrompt),
-        new HumanMessage(this.formatUserQuery(request))
-      ];
+      // Check if query requires web search
+      const shouldUseWebSearch = this.shouldUseWebSearch(request.query);
+      
+      let content: string;
+      let sources: string[] = [];
+      let searchUsed = false;
 
-      // Get response from LLM
-      const response = await this.llm.invoke(messages);
+      if (shouldUseWebSearch && this.toolsManager.isToolAvailable('web_search')) {
+        // Use web search tool
+        const webSearchTool = this.toolsManager.getTool('web_search');
+        if (webSearchTool) {
+          console.log('🔍 Using web search for query:', request.query);
+          const searchResult = await webSearchTool.invoke(request.query);
+          content = searchResult;
+          
+          // Extract sources from search results
+          sources = this.extractSourcesFromSearchResult(searchResult);
+          searchUsed = true;
+        } else {
+          // Fallback to direct LLM response
+          content = await this.getDirectLLMResponse(request);
+        }
+      } else {
+        // Use direct LLM response
+        console.log('🧠 Using LLM knowledge for query:', request.query);
+        content = await this.getDirectLLMResponse(request);
+      }
       
       const processingTime = Date.now() - startTime;
 
-      // Extract and format response
-      const content = response.content as string;
-      const formattedContent = this.enhanceResponse(content, request.query);
+      // Enhance response with follow-up suggestions
+      const formattedContent = this.enhanceResponse(content, request.query, searchUsed, sources);
 
       return {
         content: formattedContent,
+        sources,
         processingTime,
         confidence: this.calculateConfidence(content),
+        searchUsed
       };
 
     } catch (error) {
@@ -100,8 +126,15 @@ export class ResearchAgent {
   /**
    * Enhance response with additional formatting and suggestions
    */
-  private enhanceResponse(content: string, originalQuery: string): string {
+  private enhanceResponse(content: string, originalQuery: string, searchUsed: boolean, sources: string[]): string {
     let enhanced = content;
+
+    // Add source transparency header
+    if (searchUsed && sources.length > 0) {
+      enhanced = `🔍 **Web Search Results**\n\n${enhanced}\n\n**Sources:**\n${sources.map((source, index) => `${index + 1}. ${source}`).join('\n')}`;
+    } else if (!searchUsed) {
+      enhanced = `🧠 **AI Knowledge Response**\n\n${enhanced}\n\n*This response is based on my training data and general knowledge.*`;
+    }
 
     // Add follow-up suggestions based on query type
     const suggestions = this.generateFollowUpSuggestions(originalQuery);
@@ -167,6 +200,48 @@ export class ResearchAgent {
   }
 
   /**
+   * Determine if a query should use web search
+   */
+  private shouldUseWebSearch(query: string): boolean {
+    const lowerQuery = query.toLowerCase();
+    const searchKeywords = [
+      'search', 'find', 'latest', 'recent', 'news', 'current', 'today', 
+      'now', 'update', 'information about', 'what is', 'who is', 'when',
+      'where', 'how to', 'latest news', 'current events', 'recent developments'
+    ];
+    
+    return searchKeywords.some(keyword => lowerQuery.includes(keyword));
+  }
+
+  /**
+   * Get direct LLM response without tools
+   */
+  private async getDirectLLMResponse(request: AgentRequest): Promise<string> {
+    const messages = [
+      new SystemMessage(agentConfig.systemPrompt),
+      new HumanMessage(this.formatUserQuery(request))
+    ];
+
+    const response = await this.llm.invoke(messages);
+    return response.content as string;
+  }
+
+  /**
+   * Extract sources from search result
+   */
+  private extractSourcesFromSearchResult(searchResult: string): string[] {
+    const sources: string[] = [];
+    const linkRegex = /Link: (https?:\/\/[^\s\n]+)/g;
+    let match;
+
+    while ((match = linkRegex.exec(searchResult)) !== null) {
+      sources.push(match[1]);
+    }
+
+    return sources;
+  }
+
+  /**
    * Get agent status information
    */
   getStatus() {
@@ -174,6 +249,7 @@ export class ResearchAgent {
       isInitialized: this.isInitialized,
       model: agentConfig.model,
       temperature: agentConfig.temperature,
+      tools: this.toolsManager.getStatus(),
     };
   }
 }
