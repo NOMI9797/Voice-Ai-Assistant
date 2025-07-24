@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Mic, MicOff, Loader2, AlertCircle, Info } from 'lucide-react';
 
 interface VoiceInputProps {
@@ -64,6 +64,21 @@ export default function VoiceInput({ onTranscript, onError, className = '' }: Vo
   const [interimTranscript, setInterimTranscript] = useState('');
   const [debugInfo, setDebugInfo] = useState<string>('');
   const recognitionRef = useRef<SpeechRecognition | null>(null);
+
+  const handleFinalTranscript = useCallback((transcript: string) => {
+    setIsProcessing(true);
+    
+    // Clean up the transcript
+    const cleanedTranscript = transcript.trim();
+    
+    if (cleanedTranscript) {
+      console.log('Final transcript:', cleanedTranscript);
+      onTranscript(cleanedTranscript);
+    }
+    
+    setIsProcessing(false);
+    setInterimTranscript('');
+  }, [onTranscript]);
 
   // Initialize speech recognition
   useEffect(() => {
@@ -188,22 +203,7 @@ export default function VoiceInput({ onTranscript, onError, className = '' }: Vo
         }
       }
     };
-  }, [onError]);
-
-  const handleFinalTranscript = (transcript: string) => {
-    setIsProcessing(true);
-    
-    // Clean up the transcript
-    const cleanedTranscript = transcript.trim();
-    
-    if (cleanedTranscript) {
-      console.log('Final transcript:', cleanedTranscript);
-      onTranscript(cleanedTranscript);
-    }
-    
-    setIsProcessing(false);
-    setInterimTranscript('');
-  };
+  }, [onError, handleFinalTranscript]);
 
   const toggleListening = () => {
     console.log('Toggle listening clicked. Current state:', { isListening, hasRecognition: !!recognitionRef.current });
@@ -252,7 +252,7 @@ export default function VoiceInput({ onTranscript, onError, className = '' }: Vo
   };
 
   const getButtonClass = () => {
-    let baseClass = 'flex items-center justify-center gap-2 px-6 py-3 rounded-full font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2';
+    const baseClass = 'flex items-center justify-center gap-2 px-6 py-3 rounded-full font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2';
     
     if (isListening) {
       return `${baseClass} bg-red-500 hover:bg-red-600 text-white focus:ring-red-500 shadow-lg transform scale-105`;

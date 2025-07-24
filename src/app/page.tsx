@@ -1,22 +1,8 @@
 'use client';
 
-import { useState } from 'react';
-import VoiceInput from '@/components/VoiceInput';
+import AIAgent from '@/components/AIAgent';
 
 export default function Home() {
-  const [transcript, setTranscript] = useState<string>('');
-  const [error, setError] = useState<string>('');
-
-  const handleTranscript = (text: string) => {
-    setTranscript(text);
-    console.log('Final transcript:', text);
-  };
-
-  const handleError = (errorMessage: string) => {
-    setError(errorMessage);
-    console.error('Voice input error:', errorMessage);
-  };
-
   return (
     <main className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 py-12 px-4">
       <div className="max-w-4xl mx-auto">
@@ -30,43 +16,8 @@ export default function Home() {
           </p>
         </div>
 
-        {/* Voice Input Section */}
-        <div className="bg-white rounded-2xl shadow-xl p-8 mb-8">
-          <div className="text-center mb-8">
-            <h2 className="text-2xl font-semibold text-gray-900 mb-2">
-              Step 1: Voice Input
-            </h2>
-            <p className="text-gray-600">
-              Click the microphone button and start speaking your question or command
-            </p>
-          </div>
-
-          <VoiceInput
-            onTranscript={handleTranscript}
-            onError={handleError}
-            className="mb-6"
-          />
-
-          {/* Transcript Display */}
-          {transcript && (
-            <div className="mt-8 p-6 bg-green-50 border border-green-200 rounded-lg">
-              <h3 className="text-lg font-semibold text-green-800 mb-2">
-                Your Question:
-              </h3>
-              <p className="text-green-700 text-lg">{transcript}</p>
-            </div>
-          )}
-
-          {/* Error Display */}
-          {error && (
-            <div className="mt-8 p-6 bg-red-50 border border-red-200 rounded-lg">
-              <h3 className="text-lg font-semibold text-red-800 mb-2">
-                Error:
-              </h3>
-              <p className="text-red-700">{error}</p>
-            </div>
-          )}
-        </div>
+        {/* AI Agent Section */}
+        <AIAgent className="mb-8" />
 
         {/* Features Preview */}
         <div className="grid md:grid-cols-3 gap-6">
@@ -103,9 +54,9 @@ export default function Home() {
 
         {/* Status */}
         <div className="mt-8 text-center">
-          <div className="inline-flex items-center gap-2 px-4 py-2 bg-blue-100 text-blue-800 rounded-full text-sm font-medium">
-            <div className="w-2 h-2 bg-blue-600 rounded-full animate-pulse"></div>
-            Step 1 Complete - Voice Input Ready
+          <div className="inline-flex items-center gap-2 px-4 py-2 bg-green-100 text-green-800 rounded-full text-sm font-medium">
+            <div className="w-2 h-2 bg-green-600 rounded-full animate-pulse"></div>
+            Step 2 Complete - AI Agent Ready
           </div>
         </div>
       </div>
