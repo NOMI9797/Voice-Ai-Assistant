@@ -3,6 +3,7 @@ import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import { AgentExecutor } from 'langchain/agents';
 import { createGroqLLM, agentConfig, LangChainError } from './config';
 import { getToolsManager, ToolsManager } from './tools';
+import { getMemoryManager, PineconeMemoryManager } from './memory/pineconeMemoryManager';
 
 export interface AgentResponse {
   content: string;
@@ -21,6 +22,7 @@ export interface AgentRequest {
 export class ResearchAgent {
   private llm!: ChatGroq;
   private toolsManager!: ToolsManager;
+  private memoryManager!: PineconeMemoryManager;
   private agentExecutor: AgentExecutor | null = null;
   private isInitialized: boolean = false;
 
@@ -28,6 +30,7 @@ export class ResearchAgent {
     try {
       this.llm = createGroqLLM();
       this.toolsManager = getToolsManager();
+      this.memoryManager = getMemoryManager();
       this.isInitialized = true;
     } catch (error) {
       console.error('Failed to initialize ResearchAgent:', error);
@@ -53,6 +56,33 @@ export class ResearchAgent {
 
       // Check if query requires web search
       const shouldUseWebSearch = this.shouldUseWebSearch(request.query);
+      
+      // Check for relevant memories first
+      let relevantMemories: Array<{
+        id: string;
+        content: string;
+        metadata: {
+          userId: string;
+          query: string;
+          response: string;
+          sources?: string[];
+          timestamp: string;
+          type: string;
+          tags?: string[];
+          confidence?: number;
+        };
+        similarity: number;
+      }> = [];
+      if (request.userId && this.memoryManager.isReady()) {
+        try {
+          relevantMemories = await this.memoryManager.searchMemories(request.query, request.userId, 3);
+          if (relevantMemories.length > 0) {
+            console.log(`🧠 Found ${relevantMemories.length} relevant memories`);
+          }
+        } catch (error) {
+          console.warn('Failed to search memories:', error);
+        }
+      }
       
       let content: string;
       let sources: string[] = [];
@@ -81,8 +111,28 @@ export class ResearchAgent {
       
       const processingTime = Date.now() - startTime;
 
-      // Enhance response with follow-up suggestions
-      const formattedContent = this.enhanceResponse(content, request.query, searchUsed, sources);
+      // Store the interaction in memory
+      if (request.userId && this.memoryManager.isReady()) {
+        try {
+          await this.memoryManager.storeMemory({
+            content: request.query,
+            metadata: {
+              userId: request.userId,
+              query: request.query,
+              response: content,
+              sources,
+              timestamp: new Date().toISOString(),
+              type: searchUsed ? 'web_search' : 'conversation',
+              confidence: this.calculateConfidence(content),
+            },
+          });
+        } catch (error) {
+          console.warn('Failed to store memory:', error);
+        }
+      }
+
+      // Enhance response with follow-up suggestions and memory context
+      const formattedContent = this.enhanceResponse(content, request.query, searchUsed, sources, relevantMemories);
 
       return {
         content: formattedContent,
@@ -126,8 +176,29 @@ export class ResearchAgent {
   /**
    * Enhance response with additional formatting and suggestions
    */
-  private enhanceResponse(content: string, originalQuery: string, searchUsed: boolean, sources: string[]): string {
+  private enhanceResponse(content: string, originalQuery: string, searchUsed: boolean, sources: string[], relevantMemories: Array<{
+    id: string;
+    content: string;
+    metadata: {
+      userId: string;
+      query: string;
+      response: string;
+      sources?: string[];
+      timestamp: string;
+      type: string;
+      tags?: string[];
+      confidence?: number;
+    };
+    similarity: number;
+  }> = []): string {
     let enhanced = content;
+
+    // Add memory context if available
+    if (relevantMemories.length > 0) {
+      enhanced = `🧠 **Memory Context**\n\nI found ${relevantMemories.length} relevant previous interactions that might be helpful:\n\n${relevantMemories.map((memory, index) => 
+        `${index + 1}. **Previous Query:** ${memory.metadata.query}\n   **Response:** ${memory.metadata.response.substring(0, 100)}...\n   **Similarity:** ${Math.round(memory.similarity * 100)}%\n`
+      ).join('\n')}\n\n---\n\n${enhanced}`;
+    }
 
     // Add source transparency header
     if (searchUsed && sources.length > 0) {
@@ -250,6 +321,7 @@ export class ResearchAgent {
       model: agentConfig.model,
       temperature: agentConfig.temperature,
       tools: this.toolsManager.getStatus(),
+      memory: this.memoryManager.getStatus(),
     };
   }
 }
