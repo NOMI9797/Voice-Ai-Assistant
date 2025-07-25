@@ -6,7 +6,7 @@ export async function POST(request: NextRequest) {
   try {
     // Parse request body
     const body = await request.json();
-    const { query, context, userId } = body as AgentRequest;
+    const { query, context, userId, sessionId } = body as AgentRequest;
 
     // Validate request
     if (!query || typeof query !== 'string' || query.trim().length === 0) {
@@ -32,6 +32,7 @@ export async function POST(request: NextRequest) {
       query: query.trim(),
       context,
       userId,
+      sessionId,
     });
 
     // Return successful response

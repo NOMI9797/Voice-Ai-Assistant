@@ -38,6 +38,7 @@ export interface MemoryDocument {
   content: string;
   metadata: {
     userId: string;
+    sessionId?: string;
     query: string;
     response: string;
     sources?: string[];
@@ -136,6 +137,7 @@ export class PineconeMemoryManager {
         metadata: {
           content: document.content,
           userId: document.metadata.userId,
+          sessionId: document.metadata.sessionId || '',
           query: document.metadata.query,
           response: document.metadata.response,
           sources: document.metadata.sources?.join('|') || '',
@@ -145,7 +147,7 @@ export class PineconeMemoryManager {
         },
       }]);
 
-      console.log(`✅ Memory stored with ID: ${id}`);
+      console.log(`✅ Memory stored with ID: ${id}, sessionId: ${document.metadata.sessionId || 'none'}`);
       return id;
     } catch (error) {
       console.error('Failed to store memory:', error);
@@ -160,7 +162,8 @@ export class PineconeMemoryManager {
   async searchMemories(
     query: string,
     userId: string,
-    limit: number = memoryConfig.maxResults
+    limit: number = memoryConfig.maxResults,
+    sessionId?: string
   ): Promise<MemorySearchResult[]> {
     if (!this.isInitialized) {
       console.warn('Memory manager not initialized, returning empty results');
@@ -170,13 +173,49 @@ export class PineconeMemoryManager {
     try {
       const queryEmbedding = this.generateSimpleEmbedding(query);
       
-      // Search in Pinecone
+      // Build filter based on whether sessionId is provided
+      const filter: any = {
+        userId: { $eq: userId },
+      };
+      
+      if (sessionId) {
+        // Strict session filtering - only get memories with exact sessionId match
+        filter.sessionId = { $eq: sessionId };
+        console.log(`🔍 Searching memories with filter: userId=${userId}, sessionId=${sessionId}`);
+      } else {
+        // If no sessionId provided, only get memories that have a sessionId (exclude old memories without sessionId)
+        filter.sessionId = { $ne: '' };
+        console.log(`🔍 Searching memories with filter: userId=${userId}, sessionId not empty`);
+      }
+      
+      // For debugging: also check if there are any memories without sessionId
+      if (sessionId) {
+        try {
+          const allUserMemories = await this.index.query({
+            vector: queryEmbedding,
+            topK: 10,
+            filter: { userId: { $eq: userId } },
+            includeMetadata: true,
+          });
+          
+          const memoriesWithoutSession = allUserMemories.matches?.filter((match: any) => 
+            !match.metadata?.sessionId || match.metadata.sessionId === ''
+          ) || [];
+          
+          if (memoriesWithoutSession.length > 0) {
+            console.log(`⚠️ Found ${memoriesWithoutSession.length} memories without sessionId for user ${userId}`);
+            console.log(`⚠️ These memories will be excluded from session-specific search`);
+          }
+        } catch (error) {
+          console.warn('Failed to check for memories without sessionId:', error);
+        }
+      }
+      
+      // Search in Pinecone - get more results initially for better ranking
       const results = await this.index.query({
         vector: queryEmbedding,
-        topK: limit,
-        filter: {
-          userId: { $eq: userId },
-        },
+        topK: Math.max(limit * 2, 10), // Get more results for better ranking
+        filter: filter,
         includeMetadata: true,
       });
 
@@ -189,11 +228,24 @@ export class PineconeMemoryManager {
       
       for (const match of results.matches) {
         if (match.metadata && match.score && match.score >= memoryConfig.similarityThreshold) {
+          // Additional check: if sessionId is provided, only include memories with matching sessionId
+          if (sessionId && match.metadata.sessionId !== sessionId) {
+            console.log(`🚫 Excluding memory with sessionId: ${match.metadata.sessionId} (expected: ${sessionId})`);
+            continue;
+          }
+          
+          // Additional safety check: never include memories without sessionId when sessionId is provided
+          if (sessionId && (!match.metadata.sessionId || match.metadata.sessionId === '')) {
+            console.log(`🚫 Excluding memory without sessionId (expected: ${sessionId})`);
+            continue;
+          }
+          
           searchResults.push({
             id: match.id,
             content: match.metadata.content as string,
             metadata: {
               userId: match.metadata.userId as string,
+              sessionId: match.metadata.sessionId as string,
               query: match.metadata.query as string,
               response: match.metadata.response as string,
               sources: match.metadata.sources ? (match.metadata.sources as string).split('|') : [],
@@ -206,7 +258,36 @@ export class PineconeMemoryManager {
         }
       }
 
-      return searchResults.sort((a, b) => b.similarity - a.similarity);
+      // Sort by a combination of similarity and recency
+      const sortedResults = searchResults.sort((a, b) => {
+        // Calculate a combined score that considers both similarity and recency
+        const aTimestamp = new Date(a.metadata.timestamp).getTime();
+        const bTimestamp = new Date(b.metadata.timestamp).getTime();
+        const now = Date.now();
+        
+        // Recency factor: more recent memories get higher scores
+        const aRecency = Math.max(0, 1 - (now - aTimestamp) / (24 * 60 * 60 * 1000)); // Decay over 24 hours
+        const bRecency = Math.max(0, 1 - (now - bTimestamp) / (24 * 60 * 60 * 1000));
+        
+        // Combined score: 70% similarity + 30% recency
+        const aScore = (a.similarity * 0.7) + (aRecency * 0.3);
+        const bScore = (b.similarity * 0.7) + (bRecency * 0.3);
+        
+        return bScore - aScore;
+      });
+
+      // Debug: Log the top results with their scores
+      if (sortedResults.length > 0) {
+        console.log(`🧠 Found ${sortedResults.length} relevant memories for query: "${query}"`);
+        sortedResults.slice(0, 3).forEach((result, index) => {
+          const timestamp = new Date(result.metadata.timestamp);
+          const timeAgo = Math.round((Date.now() - timestamp.getTime()) / (1000 * 60)); // minutes ago
+          console.log(`  ${index + 1}. Query: "${result.metadata.query}" (${timeAgo}min ago, similarity: ${result.similarity.toFixed(3)})`);
+        });
+      }
+
+      // Return only the requested number of results
+      return sortedResults.slice(0, limit);
     } catch (error) {
       console.error('Failed to search memories:', error);
       // Return empty results instead of throwing
@@ -278,6 +359,78 @@ export class PineconeMemoryManager {
     } catch (error) {
       console.error('Failed to delete memory:', error);
       throw new MemoryError('Failed to delete memory');
+    }
+  }
+
+  /**
+   * Delete all memories for a specific session
+   */
+  async deleteSessionMemories(sessionId: string): Promise<number> {
+    if (!this.isInitialized) {
+      throw new MemoryError('Memory manager is not initialized');
+    }
+
+    try {
+      // First, find all memories for this session
+      const results = await this.index.query({
+        vector: new Array(1024).fill(0), // Dummy vector
+        topK: 1000, // Get all memories
+        filter: {
+          sessionId: { $eq: sessionId },
+        },
+        includeMetadata: true,
+      });
+
+      if (!results.matches || results.matches.length === 0) {
+        console.log(`📭 No memories found for session: ${sessionId}`);
+        return 0;
+      }
+
+      // Delete all memories for this session
+      const memoryIds = results.matches.map((match: any) => match.id);
+      await this.index.deleteMany(memoryIds);
+      
+      console.log(`🗑️ Deleted ${memoryIds.length} memories for session: ${sessionId}`);
+      return memoryIds.length;
+    } catch (error) {
+      console.error('Failed to delete session memories:', error);
+      throw new MemoryError(`Failed to delete session memories: ${error}`);
+    }
+  }
+
+  /**
+   * Delete all memories for a specific user
+   */
+  async deleteUserMemories(userId: string): Promise<number> {
+    if (!this.isInitialized) {
+      throw new MemoryError('Memory manager is not initialized');
+    }
+
+    try {
+      // First, find all memories for this user
+      const results = await this.index.query({
+        vector: new Array(1024).fill(0), // Dummy vector
+        topK: 1000, // Get all memories
+        filter: {
+          userId: { $eq: userId },
+        },
+        includeMetadata: true,
+      });
+
+      if (!results.matches || results.matches.length === 0) {
+        console.log(`📭 No memories found for user: ${userId}`);
+        return 0;
+      }
+
+      // Delete all memories for this user
+      const memoryIds = results.matches.map((match: any) => match.id);
+      await this.index.deleteMany(memoryIds);
+      
+      console.log(`🗑️ Deleted ${memoryIds.length} memories for user: ${userId}`);
+      return memoryIds.length;
+    } catch (error) {
+      console.error('Failed to delete user memories:', error);
+      throw new MemoryError(`Failed to delete user memories: ${error}`);
     }
   }
 

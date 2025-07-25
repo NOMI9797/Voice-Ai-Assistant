@@ -4,6 +4,7 @@ import { AgentExecutor } from 'langchain/agents';
 import { createGroqLLM, agentConfig, LangChainError } from './config';
 import { getToolsManager, ToolsManager } from './tools';
 import { getMemoryManager, PineconeMemoryManager } from './memory/pineconeMemoryManager';
+import { getConversationMemoryManager } from './memory/conversationMemory';
 
 export interface AgentResponse {
   content: string;
@@ -17,6 +18,7 @@ export interface AgentRequest {
   query: string;
   context?: string;
   userId?: string;
+  sessionId?: string;
 }
 
 export class ResearchAgent {
@@ -57,12 +59,13 @@ export class ResearchAgent {
       // Check if query requires web search
       const shouldUseWebSearch = this.shouldUseWebSearch(request.query);
       
-      // Check for relevant memories first
+      // Check for relevant memories first (session-specific)
       let relevantMemories: Array<{
         id: string;
         content: string;
         metadata: {
           userId: string;
+          sessionId?: string;
           query: string;
           response: string;
           sources?: string[];
@@ -75,9 +78,34 @@ export class ResearchAgent {
       }> = [];
       if (request.userId && this.memoryManager.isReady()) {
         try {
-          relevantMemories = await this.memoryManager.searchMemories(request.query, request.userId, 3);
-          if (relevantMemories.length > 0) {
-            console.log(`🧠 Found ${relevantMemories.length} relevant memories`);
+          // Only search for memories within the current session - no fallback to all sessions
+          if (request.sessionId) {
+            console.log(`🔍 Searching for memories with sessionId: ${request.sessionId}`);
+            
+            // Improve search query for follow-up questions
+            let searchQuery = request.query;
+            const lowerQuery = request.query.toLowerCase();
+            let searchLimit = 3;
+            
+            if (lowerQuery.includes('its') || lowerQuery.includes('this') || lowerQuery.includes('that') || 
+                lowerQuery.includes('they') || lowerQuery.includes('them') || lowerQuery.includes('those')) {
+              // For follow-up questions, search for the most recent conversations first
+              console.log(`🔍 Detected follow-up question, searching for recent context`);
+              searchLimit = 5; // Get more memories to find the most recent relevant ones
+            }
+            
+            relevantMemories = await this.memoryManager.searchMemories(searchQuery, request.userId, searchLimit, request.sessionId);
+            if (relevantMemories.length > 0) {
+              console.log(`🧠 Found ${relevantMemories.length} relevant memories in current session (${request.sessionId})`);
+              // Log the found memories for debugging
+              relevantMemories.forEach((memory, index) => {
+                console.log(`  Memory ${index + 1}: sessionId=${memory.metadata.sessionId}, query="${memory.metadata.query}"`);
+              });
+            } else {
+              console.log(`🧠 No relevant memories found in current session (${request.sessionId})`);
+            }
+          } else {
+            console.log('🧠 No session ID provided, skipping memory search');
           }
         } catch (error) {
           console.warn('Failed to search memories:', error);
@@ -100,13 +128,13 @@ export class ResearchAgent {
           sources = this.extractSourcesFromSearchResult(searchResult);
           searchUsed = true;
         } else {
-          // Fallback to direct LLM response
-          content = await this.getDirectLLMResponse(request);
+          // Fallback to direct LLM response with memory context
+          content = await this.getDirectLLMResponse(request, relevantMemories);
         }
       } else {
-        // Use direct LLM response
+        // Use direct LLM response with memory context
         console.log('🧠 Using LLM knowledge for query:', request.query);
-        content = await this.getDirectLLMResponse(request);
+        content = await this.getDirectLLMResponse(request, relevantMemories);
       }
       
       const processingTime = Date.now() - startTime;
@@ -114,10 +142,12 @@ export class ResearchAgent {
       // Store the interaction in memory
       if (request.userId && this.memoryManager.isReady()) {
         try {
+          console.log(`💾 Storing memory for session: ${request.sessionId || 'no-session'}`);
           await this.memoryManager.storeMemory({
             content: request.query,
             metadata: {
               userId: request.userId,
+              sessionId: request.sessionId,
               query: request.query,
               response: content,
               sources,
@@ -162,12 +192,23 @@ export class ResearchAgent {
   private formatUserQuery(request: AgentRequest): string {
     let formattedQuery = request.query.trim();
 
+    // Add context if available
     if (request.context) {
       formattedQuery = `Context: ${request.context}\n\nQuestion: ${formattedQuery}`;
     }
 
+    // Add user ID for tracking
     if (request.userId) {
       formattedQuery = `[User: ${request.userId}]\n${formattedQuery}`;
+    }
+
+    // Add instruction for follow-up questions
+    if (formattedQuery.toLowerCase().includes('its') || 
+        formattedQuery.toLowerCase().includes('this') || 
+        formattedQuery.toLowerCase().includes('that') ||
+        formattedQuery.toLowerCase().includes('they') ||
+        formattedQuery.toLowerCase().includes('them')) {
+      formattedQuery = `Note: This appears to be a follow-up question. Please refer to the memory context above to understand what the user is referring to.\n\n${formattedQuery}`;
     }
 
     return formattedQuery;
@@ -195,9 +236,15 @@ export class ResearchAgent {
 
     // Add memory context if available
     if (relevantMemories.length > 0) {
-      enhanced = `🧠 **Memory Context**\n\nI found ${relevantMemories.length} relevant previous interactions that might be helpful:\n\n${relevantMemories.map((memory, index) => 
-        `${index + 1}. **Previous Query:** ${memory.metadata.query}\n   **Response:** ${memory.metadata.response.substring(0, 100)}...\n   **Similarity:** ${Math.round(memory.similarity * 100)}%\n`
-      ).join('\n')}\n\n---\n\n${enhanced}`;
+      enhanced = `🧠 **Memory Context**\n\nI found ${relevantMemories.length} relevant previous interactions that might be helpful:\n\n${relevantMemories.map((memory, index) => {
+        const timestamp = new Date(memory.metadata.timestamp);
+        const timeAgo = Math.round((Date.now() - timestamp.getTime()) / (1000 * 60)); // minutes ago
+        const responsePreview = memory.metadata.response.length > 300 
+          ? memory.metadata.response.substring(0, 300) + '...' 
+          : memory.metadata.response;
+        
+        return `${index + 1}. **Previous Query:** ${memory.metadata.query}\n   **Response:** ${responsePreview}\n   **Time:** ${timeAgo} minutes ago | **Similarity:** ${Math.round(memory.similarity * 100)}%\n`;
+      }).join('\n')}\n\n**IMPORTANT:** Use this context to understand what the user is referring to in their current question. If they use words like "its", "this", "that", "they", "them", refer to the previous conversation to understand the context. Pay attention to the most recent conversations first.\n\n---\n\n${enhanced}`;
     }
 
     // Add source transparency header
@@ -287,9 +334,51 @@ export class ResearchAgent {
   /**
    * Get direct LLM response without tools
    */
-  private async getDirectLLMResponse(request: AgentRequest): Promise<string> {
+  private async getDirectLLMResponse(request: AgentRequest, relevantMemories: Array<{
+    id: string;
+    content: string;
+    metadata: {
+      userId: string;
+      query: string;
+      response: string;
+      sources?: string[];
+      timestamp: string;
+      type: string;
+      tags?: string[];
+      confidence?: number;
+    };
+    similarity: number;
+  }> = []): Promise<string> {
+    let contextMessage = '';
+    
+    // Load conversation history from MongoDB for proper context
+    if (request.sessionId) {
+      try {
+        const conversationMemoryManager = getConversationMemoryManager();
+        const conversationContext = await conversationMemoryManager.getConversationContext(request.sessionId);
+        
+        if (conversationContext) {
+          contextMessage = `\n\n${conversationContext}`;
+          console.log(`📚 Loaded conversation context for session: ${request.sessionId}`);
+        } else {
+          console.log(`📚 No conversation history found for session: ${request.sessionId}`);
+        }
+      } catch (error) {
+        console.warn('Failed to load conversation context:', error);
+      }
+    }
+    
+    // Add Pinecone memory context as additional context (for knowledge retrieval)
+    if (relevantMemories.length > 0) {
+      const memoryContext = `\n\nADDITIONAL KNOWLEDGE CONTEXT:\n${relevantMemories.map((memory, index) => 
+        `${index + 1}. Previous Query: "${memory.metadata.query}"\n   Response: ${memory.metadata.response.substring(0, 200)}...\n`
+      ).join('\n')}\n\nUse this additional knowledge context if relevant to the current question.`;
+      
+      contextMessage += memoryContext;
+    }
+
     const messages = [
-      new SystemMessage(agentConfig.systemPrompt),
+      new SystemMessage(agentConfig.systemPrompt + contextMessage),
       new HumanMessage(this.formatUserQuery(request))
     ];
 

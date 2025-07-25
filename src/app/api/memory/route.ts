@@ -23,13 +23,14 @@ export async function GET(request: NextRequest) {
 
       case 'search':
         const query = searchParams.get('query');
+        const sessionId = searchParams.get('sessionId');
         if (!query || !userId) {
           return NextResponse.json({ 
             error: 'Query and userId are required for search', 
             code: 'MISSING_PARAMS' 
           }, { status: 400 });
         }
-        const searchResults = await memoryManager.searchMemories(query, userId);
+        const searchResults = await memoryManager.searchMemories(query, userId, 5, sessionId || undefined);
         return NextResponse.json({ success: true, data: searchResults });
 
       case 'recent':
@@ -59,14 +60,9 @@ export async function GET(request: NextRequest) {
 export async function DELETE(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
+    const action = searchParams.get('action');
     const memoryId = searchParams.get('id');
-
-    if (!memoryId) {
-      return NextResponse.json({ 
-        error: 'Memory ID is required', 
-        code: 'MISSING_MEMORY_ID' 
-      }, { status: 400 });
-    }
+    const userId = searchParams.get('userId');
 
     const memoryManager = getMemoryManager();
     
@@ -75,6 +71,38 @@ export async function DELETE(request: NextRequest) {
         error: 'Memory system is not available', 
         code: 'MEMORY_NOT_AVAILABLE' 
       }, { status: 503 });
+    }
+
+    if (action === 'clear') {
+      if (!userId) {
+        return NextResponse.json({ 
+          error: 'UserId is required for clearing memories', 
+          code: 'MISSING_USER_ID' 
+        }, { status: 400 });
+      }
+
+      try {
+        // Delete all memories for this user
+        const deletedCount = await memoryManager.deleteUserMemories(userId);
+        return NextResponse.json({ 
+          success: true, 
+          message: `Cleared ${deletedCount} memories for user` 
+        });
+      } catch (error) {
+        console.error('Failed to clear user memories:', error);
+        return NextResponse.json({ 
+          error: 'Failed to clear user memories', 
+          code: 'CLEAR_ERROR' 
+        }, { status: 500 });
+      }
+    }
+
+    // Default: delete specific memory
+    if (!memoryId) {
+      return NextResponse.json({ 
+        error: 'Memory ID is required', 
+        code: 'MISSING_MEMORY_ID' 
+      }, { status: 400 });
     }
 
     const deleted = await memoryManager.deleteMemory(memoryId);
