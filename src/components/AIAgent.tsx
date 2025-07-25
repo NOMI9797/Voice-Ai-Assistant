@@ -2,7 +2,8 @@
 
 import React, { useState, useEffect } from 'react';
 import VoiceInput from './VoiceInput';
-import { Bot, Loader2, AlertCircle, CheckCircle, Clock, Info, MessageSquare, Plus, Trash2, Search, FileText, Brain, Sparkles, Zap, Globe, Database, Menu, X } from 'lucide-react';
+import MultiModalUpload from './MultiModalUpload';
+import { Bot, Loader2, AlertCircle, CheckCircle, Clock, Info, MessageSquare, Plus, Trash2, Search, FileText, Brain, Sparkles, Zap, Globe, Database, Menu, X, Youtube } from 'lucide-react';
 
 interface AgentResponse {
   content: string;
@@ -71,6 +72,10 @@ export default function AIAgent({ className = '' }: AIAgentProps) {
   const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [userId, setUserId] = useState<string | null>(null);
+  
+  // Multi-modal state
+  const [showMultiModal, setShowMultiModal] = useState(false);
+  const [multimodalResults, setMultimodalResults] = useState<any[]>([]);
 
   // Set userId on client-side mount
   useEffect(() => {
@@ -387,9 +392,35 @@ export default function AIAgent({ className = '' }: AIAgentProps) {
       setChatHistory([]);
       setChatSessions([]);
       setCurrentSessionId(null);
+      setMultimodalResults([]);
       // Reload the page to generate a new userId
       window.location.reload();
     }
+  };
+
+  // Multi-modal handlers
+  const handleAnalysisComplete = (result: any) => {
+    setMultimodalResults(prev => [...prev, result]);
+    setShowMultiModal(false);
+    
+    // Add a system message to chat about the processed content
+    const systemMessage: ChatMessage = {
+      id: `multimodal_${Date.now()}`,
+      type: 'ai',
+      content: `📄 **${result.type === 'pdf' ? 'PDF Document' : 'YouTube Video'} Processed Successfully!**
+
+${result.analysis}
+
+You can now ask questions about this content. The AI will use this information to provide relevant answers.`,
+      timestamp: new Date()
+    };
+    
+    setChatHistory(prev => [...prev, systemMessage]);
+  };
+
+  const handleMultimodalError = (error: string) => {
+    setError(error);
+    setTimeout(() => setError(null), 5000);
   };
 
   const formatResponse = (content: string, response: AgentResponse) => {
@@ -480,6 +511,13 @@ export default function AIAgent({ className = '' }: AIAgentProps) {
              >
                <Plus className="w-4 h-4" />
                New Chat
+             </button>
+             <button
+               onClick={() => setShowMultiModal(true)}
+               className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-gradient-to-r from-blue-500/20 to-purple-500/20 backdrop-blur-sm border border-blue-500/30 rounded-lg text-blue-300 hover:bg-blue-500/30 transition-all duration-300"
+             >
+               <FileText className="w-4 h-4" />
+               Upload Media
              </button>
              <button
                onClick={clearUserData}
@@ -666,6 +704,56 @@ export default function AIAgent({ className = '' }: AIAgentProps) {
           <VoiceInput onTranscript={handleTranscript} />
         </div>
       </div>
+
+      {/* Multi-modal Upload Modal */}
+      {showMultiModal && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 border border-white/10 rounded-2xl p-6 w-full max-w-4xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-gradient-to-r from-blue-500 to-purple-500 rounded-lg flex items-center justify-center">
+                  <FileText className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <h2 className="text-white font-semibold text-xl">Upload Media</h2>
+                  <p className="text-gray-400 text-sm">Process PDF documents or YouTube videos</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowMultiModal(false)}
+                className="p-2 rounded-lg hover:bg-white/10 text-white transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            {userId && currentSessionId ? (
+              <MultiModalUpload
+                userId={userId}
+                sessionId={currentSessionId}
+                onAnalysisComplete={handleAnalysisComplete}
+                onError={handleMultimodalError}
+              />
+            ) : (
+              <div className="text-center py-8">
+                <div className="w-16 h-16 bg-gradient-to-r from-blue-500 to-purple-500 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <AlertCircle className="w-8 h-8 text-white" />
+                </div>
+                <h3 className="text-white font-semibold text-lg mb-2">Session Required</h3>
+                <p className="text-gray-400 text-sm mb-4">
+                  Please start a new chat or select an existing chat session to upload media.
+                </p>
+                <button
+                  onClick={createNewSession}
+                  className="bg-gradient-to-r from-blue-500 to-purple-500 text-white px-6 py-2 rounded-lg hover:shadow-lg transition-all duration-200"
+                >
+                  Start New Chat
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Mobile Overlay */}
       {sidebarOpen && (

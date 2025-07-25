@@ -56,7 +56,7 @@ export default function Home() {
         <div className="mt-8 text-center">
           <div className="inline-flex items-center gap-2 px-4 py-2 bg-green-100 text-green-800 rounded-full text-sm font-medium">
             <div className="w-2 h-2 bg-green-600 rounded-full animate-pulse"></div>
-                             Step 4 Complete - Pinecone Memory Integration Ready
+                             Step 5 Complete - Multi-modal Support Ready
           </div>
         </div>
       </div>
