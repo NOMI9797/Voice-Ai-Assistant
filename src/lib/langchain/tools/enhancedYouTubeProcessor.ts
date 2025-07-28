@@ -93,26 +93,21 @@ export class EnhancedYouTubeProcessorTool extends Tool {
   }
 
   /**
-   * Extract transcript using youtube-transcript-api
+   * Extract transcript using youtube-transcript
    */
   private async extractTranscript(videoId: string): Promise<string> {
     try {
-      console.log('🔄 Attempting transcript extraction for video ID:', videoId);
-      
-      // Try to import and use youtube-transcript-api
-      const transcriptApi = await import('youtube-transcript-api');
-      const YoutubeTranscriptApi = transcriptApi.YoutubeTranscriptApi || transcriptApi.default;
-      
-      if (YoutubeTranscriptApi) {
-        const transcriptData = await YoutubeTranscriptApi.getTranscript(videoId);
-        const transcript = transcriptData.map((item: any) => item.text).join(' ');
-        console.log('✅ Transcript extracted successfully');
-        return transcript;
+      // Dynamic import for ESM compatibility
+      const { YoutubeTranscript } = await import('youtube-transcript');
+      const transcriptData = await YoutubeTranscript.fetchTranscript(videoId);
+      if (transcriptData && transcriptData.length > 0) {
+        return transcriptData.map((item: any) => item.text).join(' ');
       }
+      return '';
     } catch (error) {
       console.warn('⚠️ Transcript extraction failed:', error);
+      return '';
     }
-    return '';
   }
 
   /**

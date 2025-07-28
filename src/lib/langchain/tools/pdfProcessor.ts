@@ -100,8 +100,8 @@ export class PDFProcessorTool extends Tool {
         creationDate: data.info?.CreationDate ? this.parsePDFDate(data.info.CreationDate) : undefined,
       };
 
-      // Generate summary (first 1000 characters for better overview)
-      const summary = text.length > 1000 ? text.substring(0, 1000) + '...' : text;
+      // Generate summary (first 2000 characters for better overview)
+      const summary = text.length > 2000 ? text.substring(0, 2000) + '...' : text;
       
       // Extract key topics (simple keyword extraction)
       const keyTopics = this.extractKeyTopics(text);
@@ -163,27 +163,30 @@ export class PDFProcessorTool extends Tool {
       const result = await this.processPDFBuffer(pdfBuffer);
       console.log('✅ PDF processing completed successfully');
       
-      return `PDF Analysis Results:
+      return `📄 **PDF Document Processed Successfully!**
+
+PDF Analysis Results:
 
 📄 Document Information:
 - Pages: ${result.pageCount}
 - Words: ${result.wordCount}
+- Characters: ${result.text.length}
 - Title: ${result.metadata.title || 'Not specified'}
 - Author: ${result.metadata.author || 'Not specified'}
 - Subject: ${result.metadata.subject || 'Not specified'}
 - Creation Date: ${result.metadata.creationDate || 'Not specified'}
 
-📋 Summary (First 1000 characters):
+📋 Summary (First 2000 characters):
 ${result.summary}
 
 🔑 Key Topics (${result.keyTopics.length} identified):
 ${result.keyTopics.map((topic, index) => `${index + 1}. ${topic}`).join('\n')}
 
-📝 Complete Document Text:
+📝 Complete Document Content:
 ${result.text}
 
 ---
-📊 Analysis Complete: Extracted ${result.wordCount} words from ${result.pageCount} pages`;
+📊 Analysis Complete: Extracted ${result.wordCount} words (${result.text.length} characters) from ${result.pageCount} pages`;
     } catch (error) {
       console.error('❌ PDF generateAnalysis error:', error);
       throw error;

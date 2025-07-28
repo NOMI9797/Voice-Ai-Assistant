@@ -28,7 +28,7 @@
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "youtube-dl-exec": "^3.0.22",
-    "youtube-transcript-api": "^3.0.6",
+    "youtube-transcript": "^1.2.1",
     "ytdl-core": "^4.11.5"
   },
   "devDependencies": {
