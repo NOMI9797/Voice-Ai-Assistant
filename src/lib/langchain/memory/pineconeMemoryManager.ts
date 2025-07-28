@@ -22,7 +22,7 @@ export interface MemoryConfig {
 export const memoryConfig: MemoryConfig = {
   indexName: process.env.PINECONE_INDEX_NAME || 'research-memory',
   maxResults: 10,
-  similarityThreshold: 0.7,
+  similarityThreshold: 0.5, // Lower threshold for better context retrieval
 };
 
 export class MemoryError extends Error {
@@ -179,9 +179,9 @@ export class PineconeMemoryManager {
       };
       
       if (sessionId) {
-        // Strict session filtering - only get memories with exact sessionId match
+        // STRICT session filtering - only get memories from the current session
         filter.sessionId = { $eq: sessionId };
-        console.log(`🔍 Searching memories with filter: userId=${userId}, sessionId=${sessionId}`);
+        console.log(`🔍 Searching memories with STRICT filter: userId=${userId}, sessionId=${sessionId}`);
       } else {
         // If no sessionId provided, only get memories that have a sessionId (exclude old memories without sessionId)
         filter.sessionId = { $ne: '' };
@@ -214,7 +214,7 @@ export class PineconeMemoryManager {
       // Search in Pinecone - get more results initially for better ranking
       const results = await this.index.query({
         vector: queryEmbedding,
-        topK: Math.max(limit * 2, 10), // Get more results for better ranking
+        topK: Math.max(limit * 3, 15), // Get more results for better ranking
         filter: filter,
         includeMetadata: true,
       });
@@ -228,16 +228,12 @@ export class PineconeMemoryManager {
       
       for (const match of results.matches) {
         if (match.metadata && match.score && match.score >= memoryConfig.similarityThreshold) {
-          // Additional check: if sessionId is provided, only include memories with matching sessionId
-          if (sessionId && match.metadata.sessionId !== sessionId) {
-            console.log(`🚫 Excluding memory with sessionId: ${match.metadata.sessionId} (expected: ${sessionId})`);
-            continue;
-          }
-          
-          // Additional safety check: never include memories without sessionId when sessionId is provided
-          if (sessionId && (!match.metadata.sessionId || match.metadata.sessionId === '')) {
-            console.log(`🚫 Excluding memory without sessionId (expected: ${sessionId})`);
-            continue;
+          // STRICT session filtering - only include memories from the current session
+          if (sessionId) {
+            if (match.metadata.sessionId !== sessionId) {
+              console.log(`🚫 Excluding memory from different session: ${match.metadata.sessionId} (expected: ${sessionId})`);
+              continue;
+            }
           }
           
           searchResults.push({
@@ -258,9 +254,9 @@ export class PineconeMemoryManager {
         }
       }
 
-      // Sort by a combination of similarity and recency
+      // Sort by a combination of similarity, recency, and session relevance
       const sortedResults = searchResults.sort((a, b) => {
-        // Calculate a combined score that considers both similarity and recency
+        // Calculate a combined score that considers similarity, recency, and session relevance
         const aTimestamp = new Date(a.metadata.timestamp).getTime();
         const bTimestamp = new Date(b.metadata.timestamp).getTime();
         const now = Date.now();
@@ -269,7 +265,8 @@ export class PineconeMemoryManager {
         const aRecency = Math.max(0, 1 - (now - aTimestamp) / (24 * 60 * 60 * 1000)); // Decay over 24 hours
         const bRecency = Math.max(0, 1 - (now - bTimestamp) / (24 * 60 * 60 * 1000));
         
-        // Combined score: 70% similarity + 30% recency
+        // Since we're now using strict session filtering, all memories are from the same session
+        // So we only need to consider similarity and recency
         const aScore = (a.similarity * 0.7) + (aRecency * 0.3);
         const bScore = (b.similarity * 0.7) + (bRecency * 0.3);
         

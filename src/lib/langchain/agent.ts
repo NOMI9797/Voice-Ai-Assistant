@@ -78,20 +78,23 @@ export class ResearchAgent {
       }> = [];
       if (request.userId && this.memoryManager.isReady()) {
         try {
-          // Only search for memories within the current session - no fallback to all sessions
+          // Search for memories with intelligent context detection
           if (request.sessionId) {
             console.log(`🔍 Searching for memories with sessionId: ${request.sessionId}`);
             
             // Improve search query for follow-up questions
             let searchQuery = request.query;
             const lowerQuery = request.query.toLowerCase();
-            let searchLimit = 3;
+            let searchLimit = 5; // Increased base limit
             
-            if (lowerQuery.includes('its') || lowerQuery.includes('this') || lowerQuery.includes('that') || 
-                lowerQuery.includes('they') || lowerQuery.includes('them') || lowerQuery.includes('those')) {
+            // Detect follow-up questions and pronouns that need context
+            const followUpIndicators = ['its', 'this', 'that', 'they', 'them', 'those', 'it', 'he', 'she', 'his', 'her', 'their'];
+            const isFollowUpQuestion = followUpIndicators.some(indicator => lowerQuery.includes(indicator));
+            
+            if (isFollowUpQuestion) {
               // For follow-up questions, search for the most recent conversations first
-              console.log(`🔍 Detected follow-up question, searching for recent context`);
-              searchLimit = 5; // Get more memories to find the most recent relevant ones
+              console.log(`🔍 Detected follow-up question, searching for recent context in current session`);
+              searchLimit = 8; // Get more memories to find the most recent relevant ones
             }
             
             relevantMemories = await this.memoryManager.searchMemories(searchQuery, request.userId, searchLimit, request.sessionId);
@@ -339,6 +342,7 @@ export class ResearchAgent {
     content: string;
     metadata: {
       userId: string;
+      sessionId?: string;
       query: string;
       response: string;
       sources?: string[];
@@ -370,9 +374,11 @@ export class ResearchAgent {
     
     // Add Pinecone memory context as additional context (for knowledge retrieval)
     if (relevantMemories.length > 0) {
-      const memoryContext = `\n\nADDITIONAL KNOWLEDGE CONTEXT:\n${relevantMemories.map((memory, index) => 
-        `${index + 1}. Previous Query: "${memory.metadata.query}"\n   Response: ${memory.metadata.response.substring(0, 200)}...\n`
-      ).join('\n')}\n\nUse this additional knowledge context if relevant to the current question.`;
+      const memoryContext = `\n\nADDITIONAL KNOWLEDGE CONTEXT:\n${relevantMemories.map((memory, index) => {
+        const timestamp = new Date(memory.metadata.timestamp).toLocaleTimeString();
+        const sessionInfo = memory.metadata.sessionId ? ` (Session: ${memory.metadata.sessionId})` : '';
+        return `${index + 1}. Previous Query: "${memory.metadata.query}"${sessionInfo} [${timestamp}]\n   Response: ${memory.metadata.response.substring(0, 300)}...\n   Similarity: ${(memory.similarity * 100).toFixed(1)}%\n`;
+      }).join('\n')}\n\nUse this additional knowledge context if relevant to the current question. Pay special attention to the most recent and most similar memories.`;
       
       contextMessage += memoryContext;
     }

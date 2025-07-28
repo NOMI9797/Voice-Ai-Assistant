@@ -67,11 +67,11 @@ export class ConversationMemoryManager {
       return '';
     }
 
-    // Return the last 10 messages for context (to avoid token limits)
-    const recentMessages = memory.messages.slice(-10);
+    // Return the last 15 messages for better context (increased from 10)
+    const recentMessages = memory.messages.slice(-15);
     const recentHistory = this.formatConversationHistory(recentMessages);
     
-    return `CONVERSATION HISTORY:\n${recentHistory}\n\nIMPORTANT: Use this conversation history to understand the context. If the user asks follow-up questions using words like "its", "this", "that", "they", "them", refer to the previous conversation to understand what they're referring to.`;
+    return `CONVERSATION HISTORY:\n${recentHistory}\n\nIMPORTANT: Use this conversation history to understand the context. If the user asks follow-up questions using words like "its", "this", "that", "they", "them", "those", "it", refer to the previous conversation to understand what they're referring to. Pay special attention to the most recent exchanges for context.`;
   }
 
   /**
